@@ -2,6 +2,7 @@ package com.bgsoftware.wildstacker.listeners;
 
 import com.bgsoftware.wildstacker.Locale;
 import com.bgsoftware.wildstacker.WildStackerPlugin;
+import com.bgsoftware.wildstacker.api.enums.EntityFlag;
 import com.bgsoftware.wildstacker.api.enums.SpawnCause;
 import com.bgsoftware.wildstacker.api.enums.UnstackResult;
 import com.bgsoftware.wildstacker.api.objects.StackedEntity;
@@ -15,6 +16,7 @@ import com.bgsoftware.wildstacker.objects.WStackedEntity;
 import com.bgsoftware.wildstacker.objects.WStackedSpawner;
 import com.bgsoftware.wildstacker.utils.GeneralUtils;
 import com.bgsoftware.wildstacker.utils.ServerVersion;
+import com.bgsoftware.wildstacker.utils.entity.EntitiesGetter;
 import com.bgsoftware.wildstacker.utils.entity.EntityStorage;
 import com.bgsoftware.wildstacker.utils.entity.EntityUtils;
 import com.bgsoftware.wildstacker.utils.events.EventsCaller;
@@ -391,11 +393,8 @@ public final class SpawnersListener implements Listener {
                 e.getClickedBlock().getType() == Material.TNT && e.getItem() != null && e.getItem().getType().equals(Material.FLINT_AND_STEEL)){
             Location location = e.getClickedBlock().getLocation();
             Executor.sync(() -> {
-                try{
-                    EntityUtils.getNearbyEntities(location, 1, entity -> entity instanceof TNTPrimed)
-                            .whenComplete((nearbyEntities,  ex) -> nearbyEntities.stream().findFirst()
-                                    .ifPresent(entity -> explodableSources.put(entity, e.getPlayer().getUniqueId())));
-                }catch(Throwable ignored){}
+                EntitiesGetter.getNearbyEntities(location, 1, entity -> entity instanceof TNTPrimed)
+                        .findFirst().ifPresent(entity -> explodableSources.put(entity, e.getPlayer().getUniqueId()));
             }, 2L);
         }
     }
@@ -414,15 +413,22 @@ public final class SpawnersListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onSpawnerSpawn(SpawnerSpawnEvent e){
-        if(plugin.getSettings().spawnersOverrideEnabled || !listenToSpawnEvent || !(e.getEntity() instanceof LivingEntity))
+        if(!listenToSpawnEvent || !(e.getEntity() instanceof LivingEntity))
             return;
 
-        EntityStorage.setMetadata(e.getEntity(), "spawn-cause", SpawnCause.SPAWNER);
+        StackedSpawner stackedSpawner = WStackedSpawner.of(e.getSpawner());
+
+        if(plugin.getSettings().spawnersOverrideEnabled){
+            // We make sure the spawner is still overridden by WildStacker
+            // If the spawner was updated again, it will return true, and therefore we must calculate the mobs again.
+            if(!plugin.getNMSSpawners().updateStackedSpawner(stackedSpawner))
+                return;
+        }
+
+        EntityStorage.setMetadata(e.getEntity(), EntityFlag.SPAWN_CAUSE, SpawnCause.SPAWNER);
         StackedEntity stackedEntity = WStackedEntity.of(e.getEntity());
 
         stackedEntity.updateNerfed();
-
-        StackedSpawner stackedSpawner = WStackedSpawner.of(e.getSpawner());
 
         ((WStackedEntity) stackedEntity).setUpgradeId(((WStackedSpawner) stackedSpawner).getUpgradeId());
 
@@ -439,8 +445,7 @@ public final class SpawnersListener implements Listener {
 
         else{
             stackedEntity.setStackAmount(stackedSpawner.getStackAmount(), true);
-            //Making sure the stacking is ran at least one tick later, so the entity will be considered "valid".
-            Executor.sync(() -> stackedEntity.runSpawnerStackAsync(stackedSpawner, null), 1L);
+            stackedEntity.runSpawnerStackAsync(stackedSpawner, null);
         }
     }
 
@@ -563,18 +568,15 @@ public final class SpawnersListener implements Listener {
             if(!plugin.getSettings().floatingSpawnerNames || stackedSpawner.getStackAmount() <= 1)
                 return;
 
-            String customName = plugin.getSettings().hologramCustomName;
+            String customName = plugin.getSettings().spawnersCustomName;
 
             if (customName.isEmpty())
                 return;
 
-            int amount = stackedSpawner.getStackAmount();
+            ((WStackedSpawner) stackedSpawner).setCachedDisplayName(
+                    EntityUtils.getFormattedType(stackedSpawner.getSpawnedType().name()));
 
-            customName = customName
-                    .replace("{0}", Integer.toString(amount))
-                    .replace("{1}", EntityUtils.getFormattedType(stackedSpawner.getSpawnedType().name()))
-                    .replace("{2}", EntityUtils.getFormattedType(stackedSpawner.getSpawnedType().name()).toUpperCase());
-
+            customName = plugin.getSettings().spawnersNameBuilder.build(stackedSpawner);
             ((WStackedSpawner) stackedSpawner).setHologramName(customName, true);
 
             Executor.sync(((WStackedSpawner) stackedSpawner)::removeHologram, 60L);

@@ -2,6 +2,7 @@ package com.bgsoftware.wildstacker.listeners;
 
 import com.bgsoftware.wildstacker.Locale;
 import com.bgsoftware.wildstacker.WildStackerPlugin;
+import com.bgsoftware.wildstacker.api.enums.EntityFlag;
 import com.bgsoftware.wildstacker.api.objects.StackedEntity;
 import com.bgsoftware.wildstacker.api.objects.StackedItem;
 import com.bgsoftware.wildstacker.hooks.PluginHooks;
@@ -12,15 +13,17 @@ import com.bgsoftware.wildstacker.listeners.events.ScuteDropEvent;
 import com.bgsoftware.wildstacker.objects.WStackedEntity;
 import com.bgsoftware.wildstacker.objects.WStackedItem;
 import com.bgsoftware.wildstacker.utils.ServerVersion;
+import com.bgsoftware.wildstacker.utils.entity.EntitiesGetter;
 import com.bgsoftware.wildstacker.utils.entity.EntityStorage;
 import com.bgsoftware.wildstacker.utils.entity.EntityUtils;
 import com.bgsoftware.wildstacker.utils.items.ItemUtils;
-import com.bgsoftware.wildstacker.utils.reflection.ReflectionUtils;
+import com.bgsoftware.wildstacker.utils.legacy.EntityTypes;
 import com.bgsoftware.wildstacker.utils.threads.Executor;
 import org.bukkit.ChatColor;
 import org.bukkit.Chunk;
 import org.bukkit.Sound;
 import org.bukkit.block.Block;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.event.EventHandler;
@@ -49,12 +52,16 @@ public final class ItemsListener implements Listener {
 
     public ItemsListener(WildStackerPlugin plugin) {
         this.plugin = plugin;
+
         if(ServerVersion.isAtLeast(ServerVersion.v1_13))
             plugin.getServer().getPluginManager().registerEvents(new ScuteListener(plugin), plugin);
-        if(ReflectionUtils.isPluginEnabled("org.bukkit.event.block.BlockDropItemEvent"))
-            plugin.getServer().getPluginManager().registerEvents(new BlockDropItemListener(plugin), plugin);
         if(ServerVersion.isAtLeast(ServerVersion.v1_8))
             plugin.getServer().getPluginManager().registerEvents(new MergeListener(plugin), plugin);
+
+        try{
+            Class.forName("org.bukkit.event.block.BlockDropItemEvent");
+            plugin.getServer().getPluginManager().registerEvents(new BlockDropItemListener(plugin), plugin);
+        }catch (Exception ignored){}
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -66,6 +73,8 @@ public final class ItemsListener implements Listener {
 
         if(!stackedItem.isCached())
             return;
+
+        EntitiesGetter.handleEntitySpawn(e.getEntity());
 
         int limit = stackedItem.getStackLimit();
 
@@ -82,8 +91,8 @@ public final class ItemsListener implements Listener {
                 return;
 
             Executor.sync(() -> {
-                if(EntityStorage.hasMetadata(e.getEntity(), "player-drop"))
-                    EntityStorage.removeMetadata(e.getEntity(), "player-drop");
+                if(EntityStorage.hasMetadata(e.getEntity(), EntityFlag.DROPPED_BY_PLAYER))
+                    EntityStorage.removeMetadata(e.getEntity(), EntityFlag.DROPPED_BY_PLAYER);
                 else if(isChunkLimit(e.getLocation().getChunk()))
                     stackedItem.remove();
             });
@@ -93,7 +102,7 @@ public final class ItemsListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerItemDrop(PlayerDropItemEvent e){
-        EntityStorage.setMetadata(e.getItemDrop(), "player-drop", true);
+        EntityStorage.setMetadata(e.getItemDrop(), EntityFlag.DROPPED_BY_PLAYER, true);
     }
 
     @EventHandler
@@ -121,8 +130,8 @@ public final class ItemsListener implements Listener {
         StackedItem stackedItem = e.getItem();
         Item item = stackedItem.getItem();
 
-        if(EntityStorage.hasMetadata(item, "pickup")){
-            EntityStorage.removeMetadata(item, "pickup");
+        if(EntityStorage.hasMetadata(item, EntityFlag.RECENTLY_PICKED_UP)){
+            EntityStorage.removeMetadata(item, EntityFlag.RECENTLY_PICKED_UP);
             stackedItem.remove();
 
             e.setCancelled(true);
@@ -142,8 +151,26 @@ public final class ItemsListener implements Listener {
             int stackAmount = stackedItem.getStackAmount();
 
             if(e.getInventory() != null) {
+                // For no reason, villagers pickup the item and then call the event.
+                // Therefore, even if it's cancelled, the item is still in their inventory.
+                if(e.getEntityType() == EntityType.VILLAGER) {
+                    e.getInventory().removeItem(stackedItem.getItemStack());
+                }
+
                 stackedItem.giveItemStack(e.getInventory());
-            }else{
+            }
+
+            else if(EntityTypes.fromEntity(e.getEntity()) == EntityTypes.PIGLIN &&
+                    plugin.getNMSAdapter().handlePiglinPickup(e.getEntity(), item)){
+                if(stackAmount <= 1){
+                    stackedItem.remove();
+                }
+                else{
+                    stackedItem.setStackAmount(stackAmount - 1, true);
+                }
+            }
+
+            else{
                 ItemStack itemStack = stackedItem.getItemStack();
                 int maxStackSize = plugin.getSettings().itemsFixStackEnabled || itemStack.getType().name().contains("SHULKER_BOX") ? itemStack.getMaxStackSize() : 64;
 
@@ -182,7 +209,7 @@ public final class ItemsListener implements Listener {
 
             if (stackedItem.getStackAmount() <= 0) {
                 item.setPickupDelay(5);
-                EntityStorage.setMetadata(item, "pickup", true);
+                EntityStorage.setMetadata(item, EntityFlag.RECENTLY_PICKED_UP, true);
 
                 Executor.sync(() -> {
                     e.getItem().remove();
@@ -234,10 +261,9 @@ public final class ItemsListener implements Listener {
         plugin.getSystemManager().toggleItemNames(e.getPlayer());
 
         //Refresh item names
-        EntityUtils.getNearbyEntities(e.getPlayer().getLocation(), 48, entity ->
+        EntitiesGetter.getNearbyEntities(e.getPlayer().getLocation(), 48, entity ->
                 entity instanceof Item && plugin.getNMSAdapter().isCustomNameVisible(entity))
-                .whenComplete((nearbyEntities, ex) ->
-                        nearbyEntities.forEach(entity -> ProtocolLibHook.updateName(e.getPlayer(), entity)));
+                .forEach(entity -> ProtocolLibHook.updateName(e.getPlayer(), entity));
     }
 
     private boolean isChunkLimit(Chunk chunk){
@@ -319,7 +345,6 @@ public final class ItemsListener implements Listener {
             this.plugin = plugin;
         }
 
-        @SuppressWarnings("deprecation")
         @EventHandler
         public void onBlockDropItem(BlockDropItemEvent e){
             if(!plugin.getSettings().itemsStackingEnabled)

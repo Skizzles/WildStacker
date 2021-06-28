@@ -34,19 +34,22 @@ public final class SpawnersProvider_Default implements SpawnersProvider {
 
     @Override
     public ItemStack getSpawnerItem(EntityType entityType, int amount, SpawnerUpgrade spawnerUpgrade) {
-        ItemStack itemStack = Materials.SPAWNER.toBukkitItem(amount);
+        ItemStack itemStack = Materials.SPAWNER.toBukkitItem(1);
+
+        if(spawnerUpgrade != null && !spawnerUpgrade.isDefault()) {
+            itemStack = ItemUtils.setSpawnerUpgrade(itemStack, spawnerUpgrade.getId());
+        }
+
         int perStackAmount = amount;
 
         if(plugin.getSettings().getStackedItem) {
             itemStack.setAmount(1);
             itemStack = ItemUtils.setSpawnerItemAmount(itemStack, amount);
         }
-        else{
+        else {
+            itemStack.setAmount(amount);
             perStackAmount = 1;
         }
-
-        if(spawnerUpgrade != null && !spawnerUpgrade.isDefault())
-            itemStack = ItemUtils.setSpawnerUpgrade(itemStack, spawnerUpgrade.getId());
 
         ItemMeta itemMeta = itemStack.getItemMeta();
 
@@ -61,10 +64,11 @@ public final class SpawnersProvider_Default implements SpawnersProvider {
 
         String customName = plugin.getSettings().spawnerItemName;
 
-        if(!customName.equals(""))
+        if(!customName.equals("")) {
             itemMeta.setDisplayName(customName.replace("{0}", perStackAmount + "")
                     .replace("{1}", EntityUtils.getFormattedType(entityType.name()))
                     .replace("{2}", spawnerUpgrade == null ? "" : spawnerUpgrade.getDisplayName()));
+        }
 
         List<String> customLore = plugin.getSettings().spawnerItemLore;
 

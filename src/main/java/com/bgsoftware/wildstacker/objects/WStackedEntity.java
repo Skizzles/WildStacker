@@ -1,6 +1,7 @@
 package com.bgsoftware.wildstacker.objects;
 
 import com.bgsoftware.wildstacker.WildStackerPlugin;
+import com.bgsoftware.wildstacker.api.enums.EntityFlag;
 import com.bgsoftware.wildstacker.api.enums.SpawnCause;
 import com.bgsoftware.wildstacker.api.enums.StackCheckResult;
 import com.bgsoftware.wildstacker.api.enums.StackResult;
@@ -16,13 +17,17 @@ import com.bgsoftware.wildstacker.hooks.PluginHooks;
 import com.bgsoftware.wildstacker.hooks.WorldGuardHook;
 import com.bgsoftware.wildstacker.loot.LootTable;
 import com.bgsoftware.wildstacker.utils.GeneralUtils;
+import com.bgsoftware.wildstacker.utils.ServerVersion;
+import com.bgsoftware.wildstacker.utils.entity.EntitiesGetter;
 import com.bgsoftware.wildstacker.utils.entity.EntityStorage;
 import com.bgsoftware.wildstacker.utils.entity.EntityUtils;
 import com.bgsoftware.wildstacker.utils.entity.StackCheck;
 import com.bgsoftware.wildstacker.utils.events.EventsCaller;
 import com.bgsoftware.wildstacker.utils.items.ItemStackList;
 import com.bgsoftware.wildstacker.utils.items.ItemUtils;
+import com.bgsoftware.wildstacker.utils.legacy.EntityTypes;
 import com.bgsoftware.wildstacker.utils.legacy.Materials;
+import com.bgsoftware.wildstacker.utils.pair.Pair;
 import com.bgsoftware.wildstacker.utils.particles.ParticleWrapper;
 import com.bgsoftware.wildstacker.utils.threads.Executor;
 import com.bgsoftware.wildstacker.utils.threads.StackService;
@@ -38,7 +43,6 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Parrot;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.inventory.ItemStack;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -58,19 +62,18 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
     private SpawnCause spawnCause;
     private int spawnerUpgradeId = 0;
 
-    private boolean deadEntityFlag = false;
-    private boolean removed = false;
-    private boolean demoEntity = false;
     private Predicate<LivingEntity> stackFlag = null;
-    private int breedableAmount = 0;
+
+    private final UUID cachedUUID;
+    private final int cachedEntityId;
+    private EntityType cachedType;
 
     public WStackedEntity(LivingEntity livingEntity){
-        this(livingEntity, 1, null);
-    }
-
-    public WStackedEntity(LivingEntity livingEntity, int stackAmount, @Nullable SpawnCause spawnCause){
-        super(livingEntity, stackAmount);
-        this.spawnCause = spawnCause;
+        super(livingEntity, 1);
+        this.cachedUUID = livingEntity.getUniqueId();
+        this.cachedEntityId = livingEntity.getEntityId();
+        this.spawnCause = getFlag(EntityFlag.SPAWN_CAUSE);
+        setCachedDisplayName(EntityUtils.getFormattedType(getType().name()));
     }
 
     @Override
@@ -101,12 +104,20 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
 
     @Override
     public UUID getUniqueId(){
-        return object.getUniqueId();
+        return cachedUUID;
+    }
+
+    @Override
+    public int getId() {
+        return cachedEntityId;
     }
 
     @Override
     public EntityType getType(){
-        return object.getType();
+        if(cachedType == null)
+            cachedType = object.getType();
+
+        return cachedType;
     }
 
     @Override
@@ -190,24 +201,22 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
             object.setLeashHolder(null);
         }
 
-        removed = true;
+        setFlag(EntityFlag.REMOVED_ENTITY, true);
 
-        object.remove();
-
-        EntityStorage.clearMetadata(object);
+        if(ServerVersion.isAtLeast(ServerVersion.v1_17) || EntityTypes.fromEntity(object).isSlime()){
+            Executor.sync(object::remove);
+        }
+        else {
+            object.remove();
+        }
     }
 
     @Override
     public void updateName() {
-        if(Bukkit.isPrimaryThread()){
-            Executor.async(this::updateName);
-            return;
-        }
-
         if(isNameBlacklisted() || hasNameTag())
             return;
 
-        if(!isCached())
+        if(!plugin.getDataHandler().CACHED_ENTITIES.containsKey(getUniqueId()))
             return;
 
         try {
@@ -244,11 +253,14 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
         if(isNameBlacklisted())
             return StackCheckResult.BLACKLISTED_NAME;
 
-        if(!demoEntity && (object.isDead() || !object.isValid()))
+        if(!hasFlag(EntityFlag.DEMO_ENTITY) && (object.isDead() || !object.isValid()))
             return StackCheckResult.ALREADY_DEAD;
 
         if(StackCheck.NAME_TAG.isEnabled() && hasNameTag())
             return StackCheckResult.NAME_TAG;
+
+        if(hasFlag(EntityFlag.BYPASS_STACKING))
+            return StackCheckResult.BYPASS_STACKING;
 
         StackedEntity targetEntity = (StackedEntity) stackedObject;
 
@@ -258,7 +270,7 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
         if(targetEntity.getLivingEntity().isDead() || !targetEntity.getLivingEntity().isValid())
             return StackCheckResult.TARGET_ALREADY_DEAD;
 
-        if(EntityStorage.hasMetadata(targetEntity.getLivingEntity(), "corpse"))
+        if(hasFlag(EntityFlag.CORPSE))
             return StackCheckResult.CORPSE;
 
         if(StackCheck.NAME_TAG.isEnabled() && targetEntity.hasNameTag())
@@ -276,6 +288,11 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
         if(StackCheck.CAN_BREED.isEnabled() && object instanceof Animals &&
                 EntityUtils.canBeBred((Animals) object) != EntityUtils.canBeBred((Animals) targetEntity.getLivingEntity()))
             return StackCheckResult.BREED_STATUS;
+
+        if(StackCheck.IS_IN_LOVE.isEnabled() && object instanceof Animals && (
+                plugin.getNMSAdapter().isInLove((Animals) object) ||
+                plugin.getNMSAdapter().isInLove((Animals) targetEntity.getLivingEntity())))
+            return StackCheckResult.IN_LOVE_STATUS;
 
         if(PluginHooks.isWorldGuardEnabled && !plugin.getSettings().entitiesDisabledRegions.isEmpty()) {
             Set<String> regions = new HashSet<>();
@@ -297,6 +314,12 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
 
     @Override
     public void runStackAsync(Consumer<Optional<LivingEntity>> result) {
+        // Should be called sync due to collecting nearby entities
+        if(!Bukkit.isPrimaryThread()){
+            Executor.sync(() -> runStackAsync(result));
+            return;
+        }
+
         int range = getMergeRadius();
         Location entityLocation = getLivingEntity().getLocation();
 
@@ -306,45 +329,48 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
             return;
         }
 
-        EntityUtils.getNearbyEntities(object.getLocation(), range,
-                entity -> EntityUtils.isStackable(entity) && runStackCheck(WStackedEntity.of(entity)) == StackCheckResult.SUCCESS)
-                .whenComplete((nearbyEntities, ex) -> StackService.execute(this, () -> {
-                    Set<StackedEntity> filteredEntities = nearbyEntities.stream().filter(Entity::isValid).map(WStackedEntity::of).collect(Collectors.toSet());
-                    Optional<StackedEntity> entityOptional = GeneralUtils.getClosest(entityLocation, filteredEntities);
+        List<StackedEntity> nearbyEntities = EntitiesGetter.getNearbyEntities(entityLocation, range, EntityUtils::isStackable)
+                .map(WStackedEntity::of).filter(stackedEntity -> runStackCheck(stackedEntity) == StackCheckResult.SUCCESS)
+                .collect(Collectors.toList());
 
-                    if (entityOptional.isPresent()) {
-                        int minimumStackSize = GeneralUtils.get(plugin.getSettings().minimumRequiredEntities, this, 1);
-                        StackedEntity targetEntity = entityOptional.get();
+        Optional<StackedEntity> entityOptional = GeneralUtils.getClosest(entityLocation, nearbyEntities);
 
-                        if (minimumStackSize > 2) {
-                            int totalStackSize = getStackAmount();
+        if(entityOptional.isPresent()){
+            int minimumStackSize = GeneralUtils.get(plugin.getSettings().minimumRequiredEntities, this, 1);
+            StackedEntity targetEntity = entityOptional.get();
 
-                            for (StackedEntity stackedEntity : filteredEntities)
-                                totalStackSize += stackedEntity.getStackAmount();
+            if (minimumStackSize > 2) {
+                int totalStackSize = getStackAmount();
 
-                            if (totalStackSize < minimumStackSize) {
-                                updateName();
-                                if (result != null)
-                                    result.accept(Optional.empty());
-                                return;
-                            }
+                for (StackedEntity stackedEntity : nearbyEntities)
+                    totalStackSize += stackedEntity.getStackAmount();
 
-                            filteredEntities.forEach(nearbyEntity -> nearbyEntity.runStack(targetEntity));
-                        }
+                if (totalStackSize < minimumStackSize) {
+                    updateName();
+                    if (result != null)
+                        result.accept(Optional.empty());
+                    return;
+                }
 
-                        StackResult stackResult = runStack(targetEntity);
+                nearbyEntities.forEach(nearbyEntity -> nearbyEntity.runStackAsync(targetEntity, null));
+            }
 
-                        if (stackResult != StackResult.SUCCESS) {
-                            updateName();
-                            if (result != null)
-                                result.accept(Optional.empty());
-                            return;
-                        }
-                    }
-
+            runStackAsync(targetEntity, stackResult -> {
+                if (stackResult != StackResult.SUCCESS) {
+                    updateName();
+                    if (result != null)
+                        result.accept(Optional.empty());
+                }
+                else{
                     if (result != null)
                         result.accept(entityOptional.map(StackedEntity::getLivingEntity));
-        }));
+                }
+            });
+        }
+        else{
+            if (result != null)
+                result.accept(entityOptional.map(StackedEntity::getLivingEntity));
+        }
     }
 
     @Override
@@ -389,14 +415,16 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
 
     @Override
     public UnstackResult runUnstack(int amount, Entity entity) {
-        if(hasDeadFlag())
+        if(hasFlag(EntityFlag.DEAD_ENTITY))
             return UnstackResult.ALREADY_DEAD;
 
-        if(!EventsCaller.callEntityUnstackEvent(this, entity, amount))
+        Pair<Boolean, Integer> eventResult = EventsCaller.callEntityUnstackEvent(this, entity, amount);
+
+        if(!eventResult.getKey())
             return UnstackResult.EVENT_CANCELLED;
 
         int stackAmount = this.getStackAmount();
-        int newStackAmount = stackAmount - amount;
+        int newStackAmount = stackAmount - eventResult.getValue();
 
         setStackAmount(newStackAmount, true);
 
@@ -407,8 +435,8 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
 
         else {
             Executor.sync(() -> {
-                EntityStorage.setMetadata(object, "corpse", null);
-                EntityStorage.setMetadata(object, "original-amount", stackAmount);
+                setFlag(EntityFlag.CORPSE, true);
+                setFlag(EntityFlag.ORIGINAL_AMOUNT, stackAmount);
                 plugin.getNMSAdapter().setHealthDirectly(object, 0);
                 plugin.getNMSAdapter().playDeathSound(object);
             }, 2L);
@@ -457,28 +485,30 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
             return;
         }
 
-        StackService.execute(this, () -> {
-            LivingEntity linkedEntity = stackedSpawner.getLinkedEntity();
+        LivingEntity linkedEntity = stackedSpawner.getLinkedEntity();
 
-            if (linkedEntity != null) {
-                StackedEntity targetEntity = WStackedEntity.of(linkedEntity);
+        Runnable regularStackAsync = () -> runStackAsync(entityOptional -> {
+            LivingEntity targetEntity = entityOptional.orElse(object);
+            stackedSpawner.setLinkedEntity(targetEntity);
+            if (result != null)
+                result.accept(Optional.of(targetEntity));
+        });
 
-                StackResult stackResult = runStack(targetEntity);
-
-                if (stackResult == StackResult.SUCCESS) {
+        if(linkedEntity != null){
+            StackedEntity stackedLinkedEntity = WStackedEntity.of(linkedEntity);
+            runStackAsync(stackedLinkedEntity, stackResult -> {
+                if(stackResult == StackResult.SUCCESS){
                     if (result != null)
                         result.accept(Optional.of(linkedEntity));
-                    return;
                 }
-            }
-
-            runStackAsync(entityOptional -> {
-                LivingEntity targetEntity = entityOptional.orElse(object);
-                stackedSpawner.setLinkedEntity(targetEntity);
-                if (result != null)
-                    result.accept(Optional.of(targetEntity));
+                else{
+                    regularStackAsync.run();
+                }
             });
-        });
+        }
+        else{
+            regularStackAsync.run();
+        }
     }
 
     @Override
@@ -557,7 +587,7 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
     }
 
     private List<ItemStack> getTempDrops(int stackAmount){
-        List<ItemStack> drops = this.dropsMultiplier <= 0 ? new ArrayList<>() : this.drops.stream()
+        List<ItemStack> filteredDrops = this.dropsMultiplier <= 0 ? new ArrayList<>() : this.drops.stream()
                 .filter(itemStack -> itemStack != null && itemStack.getType() != Material.AIR && itemStack.getAmount() > 0)
                 .collect(Collectors.toList());
 
@@ -567,13 +597,15 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
         this.drops = null;
         this.dropsMultiplier = 1;
 
-        drops.forEach(itemStack -> {
+        List<ItemStack> finalDrops = new ArrayList<>();
+
+        filteredDrops.forEach(itemStack -> {
             ItemStack cloned = itemStack.clone();
             cloned.setAmount(itemStack.getAmount() * stackAmount * dropsMultiplier);
-            drops.add(cloned);
+            finalDrops.add(cloned);
         });
 
-        return drops;
+        return finalDrops;
     }
 
     @Override
@@ -639,32 +671,53 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
 
     @Override
     public int getDefaultUnstack() {
-        return GeneralUtils.get(plugin.getSettings().defaultUnstack, this, 1);
+        return Math.max(1, GeneralUtils.get(plugin.getSettings().defaultUnstack, this, 1));
     }
 
     @Override
     public boolean hasNameTag() {
-        return EntityStorage.hasMetadata(object, "nameTag");
+        return hasFlag(EntityFlag.NAME_TAG);
+    }
+
+    @Override
+    public boolean hasFlag(EntityFlag entityFlag) {
+        return EntityStorage.hasMetadata(cachedUUID, entityFlag);
+    }
+
+    @Override
+    public <T> T getFlag(EntityFlag entityFlag) {
+        return EntityStorage.getMetadata(cachedUUID, entityFlag);
+    }
+
+    @Override
+    public void setFlag(EntityFlag entityFlag, Object value) {
+        EntityStorage.setMetadata(cachedUUID, entityFlag, value);
+    }
+
+    @Override
+    public void removeFlag(EntityFlag entityFlag) {
+        EntityStorage.removeMetadata(cachedUUID, entityFlag);
+    }
+
+    @Override
+    public void clearFlags() {
+        EntityStorage.clearMetadata(cachedUUID);
     }
 
     public void setNameTag(){
-        EntityStorage.setMetadata(object, "nameTag", true);
+        setFlag(EntityFlag.NAME_TAG, true);
         if(saveData)
             plugin.getSystemManager().markToBeSaved(this);
     }
 
     public void setDeadFlag(boolean deadEntityFlag){
-        this.deadEntityFlag = deadEntityFlag;
+        if(deadEntityFlag)
+            setFlag(EntityFlag.DEAD_ENTITY, true);
+        else
+            removeFlag(EntityFlag.DEAD_ENTITY);
+
         if(!isCached())
             plugin.getDataHandler().CACHED_DEAD_ENTITIES.add(object.getUniqueId());
-    }
-
-    public boolean hasDeadFlag(){
-        return deadEntityFlag;
-    }
-
-    public boolean wasRemoved(){
-        return removed;
     }
 
     public boolean shouldBeStacked(){
@@ -684,19 +737,9 @@ public final class WStackedEntity extends WAsyncStackedObject<LivingEntity> impl
     }
 
     public void setDemoEntity(){
-        demoEntity = true;
+        setFlag(EntityFlag.DEMO_ENTITY, true);
         // Demo entities should not be cached!
         plugin.getSystemManager().removeStackObject(this);
-    }
-
-    public void setBreedableAmount(int breedableAmount){
-        this.breedableAmount = breedableAmount;
-    }
-
-    public int getBreedableAmount(){
-        int breedableAmount = this.breedableAmount;
-        this.breedableAmount = 0;
-        return breedableAmount;
     }
 
     /*

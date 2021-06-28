@@ -121,7 +121,7 @@ public final class WStackedSpawner extends WStackedHologramObject<CreatureSpawne
 
     @Override
     public boolean isCached() {
-        return plugin.getSettings().spawnersStackingEnabled && super.isCached();
+        return plugin.getSettings().spawnersStackingEnabled && (spawnerUpgradeId != 0 || super.isCached());
     }
 
     @Override
@@ -153,7 +153,7 @@ public final class WStackedSpawner extends WStackedHologramObject<CreatureSpawne
             return;
         }
 
-        String customName = plugin.getSettings().hologramCustomName;
+        String customName = plugin.getSettings().spawnersCustomName;
 
         if (customName.isEmpty())
             return;
@@ -165,12 +165,8 @@ public final class WStackedSpawner extends WStackedHologramObject<CreatureSpawne
             return;
         }
 
-        customName = customName
-                .replace("{0}", Integer.toString(amount))
-                .replace("{1}", EntityUtils.getFormattedType(getSpawnedType().name()))
-                .replace("{2}", EntityUtils.getFormattedType(getSpawnedType().name()).toUpperCase())
-                .replace("{3}", getUpgrade().getDisplayName());
-
+        setCachedDisplayName(EntityUtils.getFormattedType(getSpawnedType().name()));
+        customName = plugin.getSettings().spawnersNameBuilder.build(this);
         setHologramName(customName, !plugin.getSettings().floatingSpawnerNames);
     }
 
@@ -326,7 +322,13 @@ public final class WStackedSpawner extends WStackedHologramObject<CreatureSpawne
     }
 
     public void setUpgradeId(int spawnerUpgradeId, boolean fireEvent){
+        if(spawnerUpgradeId != 0 && !isCached())
+            plugin.getDataHandler().addStackedSpawner(this);
+
         this.spawnerUpgradeId = spawnerUpgradeId;
+
+        if(spawnerUpgradeId == 0 && !isCached())
+            plugin.getDataHandler().removeStackedSpawner(this);
 
         SpawnerUpgrade spawnerUpgrade = getUpgrade();
 

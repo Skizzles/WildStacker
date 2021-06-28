@@ -1,16 +1,16 @@
 package com.bgsoftware.wildstacker.utils.entity;
 
+import com.bgsoftware.common.reflection.ReflectMethod;
 import com.bgsoftware.wildstacker.WildStackerPlugin;
 import com.bgsoftware.wildstacker.api.enums.SpawnCause;
 import com.bgsoftware.wildstacker.api.enums.StackCheckResult;
 import com.bgsoftware.wildstacker.api.objects.StackedEntity;
-import com.bgsoftware.wildstacker.api.upgrades.SpawnerUpgrade;
 import com.bgsoftware.wildstacker.hooks.CitizensHook;
+import com.bgsoftware.wildstacker.hooks.LevelledMobsHook;
 import com.bgsoftware.wildstacker.hooks.MythicMobsHook;
+import com.bgsoftware.wildstacker.hooks.PluginHooks;
 import com.bgsoftware.wildstacker.utils.ServerVersion;
 import com.bgsoftware.wildstacker.utils.legacy.EntityTypes;
-import com.bgsoftware.wildstacker.utils.threads.Executor;
-import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -18,11 +18,14 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.AbstractHorse;
 import org.bukkit.entity.Ageable;
 import org.bukkit.entity.Animals;
+import org.bukkit.entity.Axolotl;
 import org.bukkit.entity.Bat;
 import org.bukkit.entity.Cat;
 import org.bukkit.entity.Enderman;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.ExperienceOrb;
+import org.bukkit.entity.GlowSquid;
+import org.bukkit.entity.Goat;
 import org.bukkit.entity.Guardian;
 import org.bukkit.entity.Horse;
 import org.bukkit.entity.HumanEntity;
@@ -57,16 +60,18 @@ import org.bukkit.potion.PotionEffectType;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 @SuppressWarnings("UnusedReturnValue")
 public final class EntityUtils {
+
+    private static final ReflectMethod<Entity> GET_SHOULDER_ENTITY_RIGHT = new ReflectMethod<>(HumanEntity.class, "getShoulderEntityRight");
+    private static final ReflectMethod<Void> SET_SHOULDER_ENTITY_RIGHT = new ReflectMethod<>(HumanEntity.class, "setShoulderEntityRight", Entity.class);
+    private static final ReflectMethod<Entity> GET_SHOULDER_ENTITY_LEFT = new ReflectMethod<>(HumanEntity.class, "getShoulderEntityLeft");
+    private static final ReflectMethod<Void> SET_SHOULDER_ENTITY_LEFT = new ReflectMethod<>(HumanEntity.class, "setShoulderEntityLeft", Entity.class);
 
     private static final WildStackerPlugin plugin = WildStackerPlugin.getPlugin();
     private static final Object NULL = new Object();
@@ -101,9 +106,6 @@ public final class EntityUtils {
         if(name == null)
             return false;
 
-        if(ChatColor.getLastColors(name).isEmpty())
-            name = ChatColor.WHITE + name;
-
         List<Pattern> blacklistedNames = plugin.getSettings().blacklistedEntitiesNames;
 
         for(Pattern pattern : blacklistedNames){
@@ -120,22 +122,17 @@ public final class EntityUtils {
             plugin.getNMSAdapter().updateLastDamageTime(livingEntity);
     }
 
-    @SuppressWarnings({"JavaReflectionMemberAccess", "JavaReflectionInvocation"})
     public static void removeParrotIfShoulder(Parrot parrot){
-        getNearbyEntities(((Animals) parrot).getLocation(), 1, entity -> entity instanceof Player).whenComplete((nearbyEntities, ex) -> {
-            try {
-                for (Entity entity : nearbyEntities) {
-                    if (parrot.equals(HumanEntity.class.getMethod("getShoulderEntityRight").invoke(entity))) {
-                        HumanEntity.class.getMethod("setShoulderEntityRight", Entity.class).invoke(entity, (Object) null);
-                        break;
-                    }
-                    if (parrot.equals(HumanEntity.class.getMethod("getShoulderEntityLeft").invoke(entity))) {
-                        HumanEntity.class.getMethod("setShoulderEntityLeft", Entity.class).invoke(entity, (Object) null);
-                        break;
-                    }
+        if(GET_SHOULDER_ENTITY_RIGHT.isValid()) {
+            EntitiesGetter.getNearbyEntities(((Animals) parrot).getLocation(), 1, entity -> entity instanceof Player).forEach(entity -> {
+                if(parrot.equals(GET_SHOULDER_ENTITY_RIGHT.invoke(entity))){
+                    SET_SHOULDER_ENTITY_RIGHT.invoke(entity, (Object) null);
                 }
-            }catch(Exception ignored){}
-        });
+                if(parrot.equals(GET_SHOULDER_ENTITY_LEFT.invoke(entity))){
+                    SET_SHOULDER_ENTITY_LEFT.invoke(entity, (Object) null);
+                }
+            });
+        }
     }
 
     public static boolean isStackable(Entity entity){
@@ -143,48 +140,43 @@ public final class EntityUtils {
                 (entity instanceof LivingEntity && !entity.getType().name().equals("ARMOR_STAND") && !(entity instanceof Player) && !CitizensHook.isNPC(entity)));
     }
 
+    public static void giveExp(Player player, int amount){
+        plugin.getNMSAdapter().giveExp(player, amount);
+    }
+
     public static void spawnExp(Location location, int amount){
-        EntityUtils.getNearbyEntities(location, 2, entity -> entity instanceof ExperienceOrb).whenComplete((nearbyEntities, ex) -> {
-            Optional<Entity> closestOrb = nearbyEntities.stream().findFirst();
+        Optional<Entity> closestOrb = EntitiesGetter.getNearbyEntities(location, 2, entity ->
+                entity instanceof ExperienceOrb).findFirst();
 
-            ExperienceOrb experienceOrb;
+        ExperienceOrb experienceOrb;
 
-            if(closestOrb.isPresent()){
-                experienceOrb = (ExperienceOrb) closestOrb.get();
-                experienceOrb.setExperience(experienceOrb.getExperience() + amount);
-            }
-            else{
-                experienceOrb = location.getWorld().spawn(location, ExperienceOrb.class);
-                experienceOrb.setExperience(amount);
-            }
-        });
+        if(closestOrb.isPresent()){
+            experienceOrb = (ExperienceOrb) closestOrb.get();
+            experienceOrb.setExperience(experienceOrb.getExperience() + amount);
+        }
+        else{
+            experienceOrb = location.getWorld().spawn(location, ExperienceOrb.class);
+            experienceOrb.setExperience(amount);
+        }
     }
 
     public static String getEntityName(StackedEntity stackedEntity){
         int stackAmount = stackedEntity.getStackAmount();
 
-        if(stackedEntity.getSpawnCause() == SpawnCause.MYTHIC_MOBS && stackedEntity.getCustomName() != null) {
-            return MythicMobsHook.getMythicName(stackedEntity.getLivingEntity()).replace("{}", String.valueOf(stackAmount));
+        if(stackedEntity.getCustomName() != null) {
+            if (stackedEntity.getSpawnCause() == SpawnCause.MYTHIC_MOBS) {
+                return MythicMobsHook.getMythicName(stackedEntity.getLivingEntity()).replace("{}", String.valueOf(stackAmount));
+            }
+            else if (PluginHooks.isLevelledMobsEnabled && LevelledMobsHook.isLevelledMob(stackedEntity.getLivingEntity())) {
+                return plugin.getNMSAdapter().getCustomName(stackedEntity.getLivingEntity()).replace("{}", String.valueOf(stackAmount));
+            }
         }
 
-        String customName = plugin.getSettings().entitiesCustomName;
-
-        if (customName.isEmpty())
+        if (plugin.getSettings().entitiesCustomName.isEmpty())
             throw new NullPointerException();
 
-        String newName = "";
-
-        SpawnerUpgrade spawnerUpgrade = stackedEntity.getUpgrade();
-
-        if(stackAmount > 1 || !spawnerUpgrade.isDefault()) {
-            newName = customName
-                    .replace("{0}", Integer.toString(stackAmount))
-                    .replace("{1}", EntityUtils.getFormattedType(stackedEntity.getType().name()))
-                    .replace("{2}", EntityUtils.getFormattedType(stackedEntity.getType().name()).toUpperCase())
-                    .replace("{3}", spawnerUpgrade.getDisplayName());
-        }
-
-        return newName;
+        return stackAmount <= 1 && stackedEntity.getUpgrade().isDefault() ? "" :
+                plugin.getSettings().entitiesNameBuilder.build(stackedEntity);
     }
 
     public static int getBadOmenAmplifier(Player player){
@@ -218,9 +210,8 @@ public final class EntityUtils {
         if(!MythicMobsHook.areSimilar(en1.getUniqueId(), en2.getUniqueId()))
             return StackCheckResult.MYTHIC_MOB_TYPE;
 
-        //EpicSpawners drops data
-        if(EntityStorage.hasMetadata(en1, "ES") != EntityStorage.hasMetadata(en2, "ES"))
-            return StackCheckResult.EPIC_SPAWNERS_DROPS;
+        if(PluginHooks.isLevelledMobsEnabled && !LevelledMobsHook.areSimilar(en1, en2))
+            return StackCheckResult.LEVELLED_MOB_LEVEL;
 
         if(StackCheck.AGE.isEnabled() && en1 instanceof Ageable){
             if((((Ageable) en1).getAge() >= 0) != (((Ageable) en2).getAge() >= 0))
@@ -444,20 +435,27 @@ public final class EntityUtils {
                 return StackCheckResult.MOOSHROOM_TYPE;
         }
 
+        if(StackCheck.AXOLOTL_TYPE.isEnabled() && StackCheck.AXOLOTL_TYPE.isTypeAllowed(entityType)){
+            if(((Axolotl) en1).getVariant() != ((Axolotl) en2).getVariant())
+                return StackCheckResult.AXOLOTL_TYPE;
+        }
+
+        if(StackCheck.AXOLOTL_PLAYING_DEAD.isEnabled() && StackCheck.AXOLOTL_PLAYING_DEAD.isTypeAllowed(entityType)){
+            if(((Axolotl) en1).isPlayingDead() != ((Axolotl) en2).isPlayingDead())
+                return StackCheckResult.AXOLOTL_PLAYING_DEAD;
+        }
+
+        if(StackCheck.GLOW_SQUID_DARK_TICKS.isEnabled() && StackCheck.GLOW_SQUID_DARK_TICKS.isTypeAllowed(entityType)){
+            if(((GlowSquid) en1).getDarkTicksRemaining() != ((GlowSquid) en2).getDarkTicksRemaining())
+                return StackCheckResult.GLOW_SQUID_DARK_TICKS;
+        }
+
+        if(StackCheck.GOAT_SCREAMING.isEnabled() && StackCheck.GOAT_SCREAMING.isTypeAllowed(entityType)){
+            if(((Goat) en1).isScreaming() != ((Goat) en2).isScreaming())
+                return StackCheckResult.GOAT_SCREAMING;
+        }
+
         return StackCheckResult.SUCCESS;
-    }
-
-    public static CompletableFuture<Collection<Entity>> getNearbyEntities(Location location, int range, Predicate<Entity> filter){
-        CompletableFuture<Collection<Entity>> completableFuture = new CompletableFuture<>();
-
-        if(Bukkit.isPrimaryThread()){
-            completableFuture.complete(plugin.getNMSAdapter().getNearbyEntities(location, range, filter));
-        }
-        else{
-            Executor.sync(() -> completableFuture.complete(plugin.getNMSAdapter().getNearbyEntities(location, range, filter)));
-        }
-
-        return completableFuture;
     }
 
     public static boolean canBeBred(Animals animal) {

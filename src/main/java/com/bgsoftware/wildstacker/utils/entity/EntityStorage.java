@@ -1,86 +1,118 @@
 package com.bgsoftware.wildstacker.utils.entity;
 
+import com.bgsoftware.wildstacker.api.enums.EntityFlag;
 import org.bukkit.entity.Entity;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Consumer;
-import java.util.function.Function;
 
+@SuppressWarnings("unchecked")
 public final class EntityStorage {
 
-    private static final Map<UUID, Map<String, Object>> entityStorage = new HashMap<>();
-    private static final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private static final Map<UUID, FlagsMap> entityStorage = new ConcurrentHashMap<>();
 
-    public static void setMetadata(Entity entity, String key, Object value){
-        UUID uuid = entity.getUniqueId();
-        write(entityStorage -> entityStorage.computeIfAbsent(uuid, s -> new HashMap<>()).put(key, value));
+    public static void setMetadata(Entity entity, EntityFlag entityFlag, Object value) {
+        setMetadata(entity.getUniqueId(), entityFlag, value);
     }
 
-    public static boolean hasMetadata(Entity entity, String key){
-        Map<String, Object> map = read(entityStorage -> entityStorage.get(entity.getUniqueId()));
-        return map != null && map.containsKey(key);
+    public static void setMetadata(UUID entityUUID, EntityFlag entityFlag, Object value) {
+        entityStorage.computeIfAbsent(entityUUID, s -> new FlagsMap()).put(entityFlag, value);
     }
 
-    public static <T> T getMetadata(Entity entity, String key, Class<T> type){
-        UUID uuid = entity.getUniqueId();
-        return read(entityStorage -> {
-            Map<String, Object> map = entityStorage.get(uuid);
-            return map == null ? null : type.cast(map.get(key));
-        });
+    public static boolean hasMetadata(Entity entity, EntityFlag entityFlag) {
+        return hasMetadata(entity.getUniqueId(), entityFlag);
     }
 
-    public static void removeMetadata(Entity entity, String key){
-        UUID uuid = entity.getUniqueId();
-        write(entityStorage -> {
-            Map<String, Object> map = entityStorage.get(uuid);
-            if(map != null)
-                map.remove(key);
-        });
+    public static boolean hasMetadata(UUID entityUUID, EntityFlag entityFlag) {
+        FlagsMap flagsMap = entityStorage.get(entityUUID);
+        return flagsMap != null && flagsMap.containsKey(entityFlag);
     }
 
-    public static void clearMetadata(Entity entity){
-        Map<?, ?> map = writeAndGet(entityStorage -> entityStorage.remove(entity.getUniqueId()));
-        if(map != null)
-            map.clear();
+    public static <T> T getMetadata(Entity entity, EntityFlag entityFlag) {
+        return getMetadata(entity.getUniqueId(), entityFlag);
     }
 
-    public static void clearCache(){
-        write(entityStorage -> {
-            for(Map map : entityStorage.values())
-                map.clear();
-            entityStorage.clear();
-        });
+    public static <T> T getMetadata(UUID entityUUID, EntityFlag entityFlag) {
+        return getMetadata(entityUUID, entityFlag, null);
     }
 
-    private static void write(Consumer<Map<UUID, Map<String, Object>>> consumer){
-        try{
-            lock.writeLock().lock();
-            consumer.accept(entityStorage);
-        }finally {
-            lock.writeLock().unlock();
+    public static <T> T getMetadata(Entity entity, EntityFlag entityFlag, T def) {
+        return getMetadata(entity.getUniqueId(), entityFlag, def);
+    }
+
+    public static <T> T getMetadata(UUID entityUUID, EntityFlag entityFlag, T def) {
+        FlagsMap flagsMap = entityStorage.get(entityUUID);
+        return flagsMap == null ? null : (T) entityFlag.getValueClass().cast(flagsMap.getOrDefault(entityFlag, def));
+    }
+
+    public static void removeMetadata(Entity entity, EntityFlag entityFlag) {
+        removeMetadata(entity.getUniqueId(), entityFlag);
+    }
+
+    public static void removeMetadata(UUID entityUUID, EntityFlag entityFlag) {
+        FlagsMap flagsMap = entityStorage.get(entityUUID);
+        if(flagsMap != null)
+            flagsMap.remove(entityFlag);
+    }
+
+    public static void clearMetadata(Entity entity) {
+        entityStorage.remove(entity.getUniqueId());
+    }
+
+    public static void clearMetadata(UUID entityUUID) {
+        entityStorage.remove(entityUUID);
+    }
+
+    public static void clearCache() {
+        entityStorage.clear();
+    }
+
+    private static class FlagsMap {
+
+        private final ReadWriteLock lock = new ReentrantReadWriteLock();
+        private final Object[] values = new Object[EntityFlag.values().length];
+
+        public Object get(EntityFlag entityFlag) {
+            return getOrDefault(entityFlag, null);
         }
-    }
 
-    private static <R> R writeAndGet(Function<Map<UUID, Map<String, Object>>, R> function){
-        try{
-            lock.writeLock().lock();
-            return function.apply(entityStorage);
-        }finally {
-            lock.writeLock().unlock();
+        public Object getOrDefault(EntityFlag entityFlag, Object defaultValue) {
+            try {
+                lock.readLock().lock();
+                Object value = values[entityFlag.ordinal()];
+                return value == null ? defaultValue : value;
+            } finally {
+                lock.readLock().unlock();
+            }
         }
-    }
 
-    private static <R> R read(Function<Map<UUID, Map<String, Object>>, R> function){
-        try{
-            lock.readLock().lock();
-            return function.apply(entityStorage);
-        }finally {
-            lock.readLock().unlock();
+        public boolean containsKey(EntityFlag entityFlag) {
+            try {
+                lock.readLock().lock();
+                return values[entityFlag.ordinal()] != null;
+            } finally {
+                lock.readLock().unlock();
+            }
         }
+
+        public Object put(EntityFlag entityFlag, Object value) {
+            try {
+                lock.writeLock().lock();
+                Object oldValue = values[entityFlag.ordinal()];
+                values[entityFlag.ordinal()] = value;
+                return oldValue;
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }
+
+        public Object remove(EntityFlag entityFlag){
+            return put(entityFlag, null);
+        }
+
     }
 
 }

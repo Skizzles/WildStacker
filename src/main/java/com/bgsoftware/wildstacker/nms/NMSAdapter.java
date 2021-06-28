@@ -3,8 +3,11 @@ package com.bgsoftware.wildstacker.nms;
 import com.bgsoftware.wildstacker.api.enums.SpawnCause;
 import com.bgsoftware.wildstacker.api.objects.StackedEntity;
 import com.bgsoftware.wildstacker.api.objects.StackedItem;
+import com.bgsoftware.wildstacker.utils.chunks.ChunkPosition;
+import com.bgsoftware.wildstacker.utils.legacy.Materials;
 import com.bgsoftware.wildstacker.utils.spawners.SyncedCreatureSpawner;
 import org.bukkit.Achievement;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -23,11 +26,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.entity.Strider;
 import org.bukkit.entity.Villager;
 import org.bukkit.entity.Zombie;
+import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.material.MaterialData;
 
-import java.util.List;
+import java.util.Collection;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -65,7 +69,11 @@ public interface NMSAdapter {
 
     boolean canSpawnOn(Entity entity, Location location);
 
-    List<Entity> getNearbyEntities(Location location, int range, Predicate<Entity> filter);
+    Collection<Entity> getEntitiesAtChunk(ChunkPosition chunkPosition);
+
+    default Collection<Entity> getNearbyEntities(Location location, int range, Predicate<Entity> filter){
+        return null;
+    }
 
     default float getItemInMainHandDropChance(EntityEquipment entityEquipment){
         return entityEquipment.getItemInHandDropChance();
@@ -139,6 +147,14 @@ public interface NMSAdapter {
         entity.setCustomNameVisible(visibleName);
     }
 
+    default Object getPersistentDataContainer(Entity entity){
+        return null;
+    }
+
+    default boolean handleTotemOfUndying(LivingEntity livingEntity){
+        return false;
+    }
+
     /*
      *   Spawner methods
      */
@@ -155,7 +171,11 @@ public interface NMSAdapter {
 
     Enchantment getGlowEnchant();
 
-    ItemStack getPlayerSkull(String texture);
+    ItemStack getPlayerSkull(ItemStack bukkitItem, String texture);
+
+    default ItemStack getPlayerSkull(String texture){
+        return getPlayerSkull(Materials.PLAYER_HEAD.toBukkitItem(), texture);
+    }
 
     default boolean isDroppedItem(Entity entity){
         return entity instanceof Item;
@@ -197,6 +217,19 @@ public interface NMSAdapter {
 
     default void startEntityListen(World world){
 
+    }
+
+    default boolean handlePiglinPickup(Entity bukkitPiglin, Item item){
+        return false;
+    }
+
+    default void giveExp(Player player, int amount){
+        if(amount > 0) {
+            PlayerExpChangeEvent playerExpChangeEvent = new PlayerExpChangeEvent(player, amount);
+            Bukkit.getPluginManager().callEvent(playerExpChangeEvent);
+            if(playerExpChangeEvent.getAmount() > 0)
+                player.giveExp(playerExpChangeEvent.getAmount());
+        }
     }
 
     /*

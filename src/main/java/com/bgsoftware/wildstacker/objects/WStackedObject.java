@@ -5,7 +5,6 @@ import com.bgsoftware.wildstacker.api.enums.StackCheckResult;
 import com.bgsoftware.wildstacker.api.enums.StackResult;
 import com.bgsoftware.wildstacker.api.enums.UnstackResult;
 import com.bgsoftware.wildstacker.api.objects.StackedObject;
-import com.bgsoftware.wildstacker.utils.GeneralUtils;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
@@ -23,6 +22,7 @@ public abstract class WStackedObject<T> implements StackedObject<T> {
     private int stackAmount;
     protected boolean saveData = true;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private String cachedDisplayName = "";
 
     protected WStackedObject(T object, int stackAmount) {
         this.object = object;
@@ -54,6 +54,14 @@ public abstract class WStackedObject<T> implements StackedObject<T> {
 
     public void setSaveData(boolean saveData){
         this.saveData = saveData && isCached();
+    }
+
+    public String getCachedDisplayName(){
+        return cachedDisplayName;
+    }
+
+    public void setCachedDisplayName(String cachedDisplayName){
+        this.cachedDisplayName = cachedDisplayName;
     }
 
     @Override
@@ -107,8 +115,9 @@ public abstract class WStackedObject<T> implements StackedObject<T> {
         if(isWorldDisabled())
             return StackCheckResult.DISABLED_WORLD;
 
-        if(!GeneralUtils.isChunkLoaded(getLocation()))
-            return StackCheckResult.CHUNK_NOT_LOADED;
+//        Removed chunk loading check, as stacked objects in unloaded chunks are not cached anymore.
+//        if(!GeneralUtils.isChunkLoaded(getLocation()))
+//            return StackCheckResult.CHUNK_NOT_LOADED;
 
         if(!stackedObject.isWhitelisted())
             return StackCheckResult.TARGET_NOT_WHITELISTED;
@@ -119,8 +128,9 @@ public abstract class WStackedObject<T> implements StackedObject<T> {
         if(stackedObject.isWorldDisabled())
             return StackCheckResult.TARGET_DISABLED_WORLD;
 
-        if(!GeneralUtils.isChunkLoaded(stackedObject.getLocation()))
-            return StackCheckResult.TARGET_CHUNK_NOT_LOADED;
+//        Removed chunk loading check, as stacked objects in unloaded chunks are not cached anymore.
+//        if(!GeneralUtils.isChunkLoaded(stackedObject.getLocation()))
+//            return StackCheckResult.TARGET_CHUNK_NOT_LOADED;
 
         int newStackAmount = this.getStackAmount() + stackedObject.getStackAmount();
 

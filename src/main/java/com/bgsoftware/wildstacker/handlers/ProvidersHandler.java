@@ -22,6 +22,7 @@ import com.bgsoftware.wildstacker.hooks.PluginHook_Novucs;
 import com.bgsoftware.wildstacker.hooks.PluginHooks;
 import com.bgsoftware.wildstacker.hooks.ProtocolLibHook;
 import com.bgsoftware.wildstacker.hooks.ShopGUIPlusHook;
+import com.bgsoftware.wildstacker.hooks.SlimefunHook;
 import com.bgsoftware.wildstacker.hooks.SpawnersProvider;
 import com.bgsoftware.wildstacker.hooks.SpawnersProvider_Default;
 import com.bgsoftware.wildstacker.hooks.SpawnersProvider_MineableSpawners;
@@ -33,12 +34,15 @@ import com.bgsoftware.wildstacker.listeners.plugins.BossListener;
 import com.bgsoftware.wildstacker.listeners.plugins.ClearLaggListener;
 import com.bgsoftware.wildstacker.listeners.plugins.CustomBossesListener;
 import com.bgsoftware.wildstacker.listeners.plugins.EchoPetListener;
+import com.bgsoftware.wildstacker.listeners.plugins.EliteBossesListener;
 import com.bgsoftware.wildstacker.listeners.plugins.EpicBossesListener;
 import com.bgsoftware.wildstacker.listeners.plugins.EpicSpawnersListener;
+import com.bgsoftware.wildstacker.listeners.plugins.JetsMinionsListener;
+import com.bgsoftware.wildstacker.listeners.plugins.MoreBossesListener;
 import com.bgsoftware.wildstacker.listeners.plugins.MyPetListener;
 import com.bgsoftware.wildstacker.listeners.plugins.MythicMobsListener;
 import com.bgsoftware.wildstacker.listeners.plugins.SilkSpawnersListener;
-import com.bgsoftware.wildstacker.utils.reflection.ReflectionUtils;
+import com.bgsoftware.wildstacker.utils.ServerVersion;
 import com.bgsoftware.wildstacker.utils.threads.Executor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -142,16 +146,24 @@ public final class ProvidersHandler {
             pluginManager.registerEvents(new EpicBossesListener(), plugin);
         if(enable && isPlugin(toCheck, "MythicMobs") && pluginManager.isPluginEnabled("MythicMobs"))
             pluginManager.registerEvents(new MythicMobsListener(), plugin);
+        if(enable && isPlugin(toCheck, "LevelledMobs") && pluginManager.isPluginEnabled("LevelledMobs"))
+            PluginHooks.isLevelledMobsEnabled = ServerVersion.isAtLeast(ServerVersion.v1_14);
         if(enable && isPlugin(toCheck, "MyPet") && pluginManager.isPluginEnabled("MyPet"))
             pluginManager.registerEvents(new MyPetListener(), plugin);
         if(enable && isPlugin(toCheck, "EchoPet") && pluginManager.isPluginEnabled("EchoPet"))
             pluginManager.registerEvents(new EchoPetListener(), plugin);
-        if(enable && isPlugin(toCheck, "EpicSpawners") && ReflectionUtils.isPluginEnabled("com.songoda.epicspawners.api.events.SpawnerSpawnEvent"))
+        if(enable && isPlugin(toCheck, "EpicSpawners") && doesClassExist("com.songoda.epicspawners.api.events.SpawnerSpawnEvent"))
             EpicSpawnersListener.register(plugin);
         if(enable && isPlugin(toCheck, "CrazyEnchantments") && pluginManager.isPluginEnabled("CrazyEnchantments"))
             CrazyEnchantmentsHook.register();
         if(enable && isPlugin(toCheck, "Boss") && pluginManager.isPluginEnabled("Boss"))
             BossListener.register(plugin);
+        if(enable && isPlugin(toCheck, "EliteBosses") && pluginManager.isPluginEnabled("EliteBosses"))
+            pluginManager.registerEvents(new EliteBossesListener(), plugin);
+        if(enable && isPlugin(toCheck, "JetsMinions") && pluginManager.isPluginEnabled("JetsMinions"))
+            pluginManager.registerEvents(new JetsMinionsListener(), plugin);
+        if(enable && isPlugin(toCheck, "Morebosses") && pluginManager.isPluginEnabled("Morebosses"))
+            pluginManager.registerEvents(new MoreBossesListener(), plugin);
 
         //Load plugin hooks
         if(isPlugin(toCheck, "mcMMO") && pluginManager.isPluginEnabled("mcMMO"))
@@ -168,15 +180,11 @@ public final class ProvidersHandler {
             EconomyHook.setEnabled(enable);
         if(isPlugin(toCheck, "MergedSpawner") && pluginManager.isPluginEnabled("MergedSpawner"))
             PluginHooks.isMergedSpawnersEnabled = enable;
-        if(isPlugin(toCheck, "ASkyBlock") && pluginManager.isPluginEnabled("ASkyBlock") && pluginManager.getPlugin("ASkyBlock").getDescription().getAuthors().contains("Ome_R"))
-            PluginHooks.isASkyBlockEnabled = enable;
         if(isPlugin(toCheck, "FastAsyncWorldEdit") && pluginManager.isPluginEnabled("FastAsyncWorldEdit"))
             PluginHooks.isFastAsyncWorldEditEnabled = enable;
-        if(isPlugin(toCheck, "PickupSpawners") && pluginManager.isPluginEnabled("PickupSpawners"))
-            PluginHooks.isPickupSpawnersEnabled = enable;
-        if(enable && isPlugin(toCheck, "FactionsTop") && ReflectionUtils.isPluginEnabled("net.novucs.ftop.FactionsTopPlugin"))
+        if(enable && isPlugin(toCheck, "FactionsTop") && doesClassExist("net.novucs.ftop.FactionsTopPlugin"))
             PluginHook_Novucs.setEnabled(plugin);
-        if (enable && isPlugin(toCheck, "ShopGUIPlus") && ReflectionUtils.isPluginEnabled("net.brcdev.shopgui.ShopGuiPlugin"))
+        if (enable && isPlugin(toCheck, "ShopGUIPlus") && doesClassExist("net.brcdev.shopgui.ShopGuiPlugin"))
             ShopGUIPlusHook.setEnabled();
         if(isPlugin(toCheck, "Jobs") && pluginManager.isPluginEnabled("Jobs"))
             JobsHook.setEnabled(enable);
@@ -184,8 +192,10 @@ public final class ProvidersHandler {
             PluginHook_FabledSkyblock.register(plugin);
         if (enable && isPlugin(toCheck, "SuperiorSkyblock2") && pluginManager.isPluginEnabled("SuperiorSkyblock2"))
             SuperiorSkyblockHook.register(plugin);
-        if (enable && isPlugin(toCheck, "NBTInjector") && ReflectionUtils.isPluginEnabled("de.tr7zw.nbtinjector.NBTInjector"))
+        if (enable && isPlugin(toCheck, "NBTInjector") && doesClassExist("de.tr7zw.nbtinjector.NBTInjector"))
             DataSerializer_NBTInjector.register(plugin);
+        if(isPlugin(toCheck, "Slimefun") && pluginManager.isPluginEnabled("Slimefun"))
+            SlimefunHook.setEnabled(enable);
     }
 
     private boolean isPlugin(Plugin plugin, String pluginName){
@@ -257,6 +267,15 @@ public final class ProvidersHandler {
     private static boolean hasPaperEntityRemoveSupport(){
         try{
             Class.forName("com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent");
+            return true;
+        }catch (Throwable ex){
+            return false;
+        }
+    }
+
+    private static boolean doesClassExist(String clazz){
+        try{
+            Class.forName(clazz);
             return true;
         }catch (Throwable ex){
             return false;

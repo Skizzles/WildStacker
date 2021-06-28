@@ -1,12 +1,11 @@
 plugins {
     id 'java'
-    id 'maven'
-    id 'com.github.johnrengelman.shadow' version '6.1.0'
+    id 'com.github.johnrengelman.shadow' version '7.0.0'
     id 'maven-publish'
 }
 
 group 'WildStacker'
-version = "3.5.1"
+version = "3.6.0"
 
 subprojects {
     apply plugin: 'java'
@@ -14,6 +13,11 @@ subprojects {
 
     repositories {
         maven { url 'https://repo.bg-software.com/repository/nms/' }
+        maven { url 'https://repo.bg-software.com/repository/common/' }
+    }
+
+    dependencies {
+        compileOnly 'com.bgsoftware.common.reflection:ReflectionUtils:latest'
     }
 
     shadowJar {
@@ -52,10 +56,12 @@ dependencies {
     implementation fileTree("archive")
 
     implementation 'com.bgsoftware.common.config:CommentedConfiguration:latest'
+    implementation 'com.bgsoftware.common.reflection:ReflectionUtils:latest'
 
     // Spigot jars
     compileOnly "org.spigotmc:v1_8_R3-Taco:latest"
     compileOnly 'org.spigotmc:v1_16_R3-Tuinity:latest'
+    compileOnly 'org.spigotmc:v1_17_R1:latest'
 
     // Plugin hooks
     compileOnly 'org.mineacademy:Boss:latest'
@@ -67,8 +73,7 @@ dependencies {
     compileOnly 'net.aminecraftdev:CustomBosses:latest'
     compileOnly 'com.dsh105:EchoPet:latest'
     compileOnly 'com.songoda:EpicBosses:latest'
-    compileOnly 'com.songoda:EpicSpawners-5:latest'
-    compileOnly 'com.songoda:EpicSpawners-6:latest'
+    compileOnly 'com.songoda:EpicSpawners-7:latest'
     compileOnly 'com.songoda:FabledSkyblock:latest'
     compileOnly 'com.massivecraft:Factions:latest'
     compileOnly 'com.drtshock:FactionsUUID:latest'
@@ -94,6 +99,10 @@ dependencies {
     compileOnly 'com.bgsoftware:WildToolsAPI:latest'
     compileOnly 'com.sk89q:WorldEdit-7:latest'
     compileOnly 'com.sk89q:WorldGuard-7:latest'
+    compileOnly 'net.splodgebox:EliteBosses:latest'
+    compileOnly 'me.jet315:JetsMinions:latest'
+    compileOnly 'me.mrcookieslime:Slimefun4-Dev:latest'
+    compileOnly 'me.derpy:MoreBosses:latest'
 }
 
 jar {
@@ -106,10 +115,11 @@ jar {
 
 processResources {
     outputs.upToDateWhen {false}
+    String versionNumber = System.getenv("BUILD_NUMBER") == null ? version : version + "-DEVb" + System.getenv("BUILD_NUMBER")
     eachFile { details ->
         if (details.name.contentEquals('plugin.yml')) {
             filter { String line ->
-                line.replace('${project.version}', version)
+                line.replace('${project.version}', versionNumber)
             }
         }
     }
@@ -134,17 +144,24 @@ shadowJar {
     configurations = [project.configurations.getByName("runtimeClasspath")]
 }
 
+task copyAPI(type: Copy) {
+    from './archive/API.jar'
+    into './target/'
+    rename('API.jar', rootProject.name + 'API.jar')
+}
+
+clean {
+    delete file('./archive/')
+}
+
 build {
     dependsOn shadowJar
-    dependsOn publish
+    dependsOn copyAPI
+    dependsOn clean
 }
 
 publish.shouldRunAfter shadowJar
 shadowJar.shouldRunAfter build
-compileJava.options.encoding = 'UTF-8'
+build.shouldRunAfter subprojects.build
 
-publishing {
-    repositories {
-        mavenLocal()
-    }
-}
+compileJava.options.encoding = 'UTF-8'

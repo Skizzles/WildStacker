@@ -17,12 +17,16 @@ public enum StackCheck {
      */
     AGE(),
     ANIMAL_OWNER(),
+    AXOLOTL_TYPE(EntityTypes.AXOLOTL),
+    AXOLOTL_PLAYING_DEAD(EntityTypes.AXOLOTL),
     BAT_AWAKE(EntityTypes.BAT),
     CAN_BREED(),
     CAT_COLLAR_COLOR(EntityTypes.CAT),
     CAT_TYPE(EntityTypes.CAT),
     ENDERMAN_CARRIED_BLOCK(EntityTypes.ENDERMAN),
     EXACT_AGE(),
+    GLOW_SQUID_DARK_TICKS(EntityTypes.GLOW_SQUID),
+    GOAT_SCREAMING(EntityTypes.GOAT),
     GUARDIAN_ELDER(EntityTypes.ELDER_GUARDIAN),
     HORSE_CARRYING_CHEST(EntityTypes.HORSE, EntityTypes.SKELETON_HORSE, EntityTypes.ZOMBIE_HORSE, EntityTypes.DONKEY, EntityTypes.MULE),
     HORSE_COLOR(EntityTypes.HORSE, EntityTypes.SKELETON_HORSE, EntityTypes.ZOMBIE_HORSE, EntityTypes.DONKEY, EntityTypes.MULE),
@@ -31,6 +35,7 @@ public enum StackCheck {
     HORSE_STYLE(EntityTypes.HORSE, EntityTypes.SKELETON_HORSE, EntityTypes.ZOMBIE_HORSE, EntityTypes.DONKEY, EntityTypes.MULE),
     HORSE_TAME_PROGRESS(EntityTypes.HORSE, EntityTypes.SKELETON_HORSE, EntityTypes.ZOMBIE_HORSE, EntityTypes.DONKEY, EntityTypes.MULE),
     HORSE_TYPE(EntityTypes.HORSE, EntityTypes.SKELETON_HORSE, EntityTypes.ZOMBIE_HORSE, EntityTypes.DONKEY, EntityTypes.MULE),
+    IS_IN_LOVE(),
     IS_TAMED(),
     LLAMA_COLOR(EntityTypes.LLAMA),
     LLAMA_STRENGTH(EntityTypes.LLAMA),
@@ -55,11 +60,12 @@ public enum StackCheck {
     ZOMBIE_PIGMAN_ANGRY(EntityTypes.ZOMBIE_PIGMAN);
 
     private boolean enabled;
-    private final EntityTypes[] allowedTypes;
+    private final boolean[] allowedTypes = new boolean[EntityTypes.values().length];
 
     StackCheck(EntityTypes... allowedTypes) {
         this.enabled = false;
-        this.allowedTypes = allowedTypes;
+        for(EntityTypes allowedType : allowedTypes)
+            this.allowedTypes[allowedType.ordinal()] = true;
     }
 
     public void setEnabled(boolean enabled) {
@@ -71,15 +77,7 @@ public enum StackCheck {
     }
 
     public boolean isTypeAllowed(EntityTypes entityType){
-        if(allowedTypes.length == 0)
-            return true;
-
-        for (EntityTypes allowedType : allowedTypes) {
-            if (entityType == allowedType)
-                return true;
-        }
-
-        return false;
+        return allowedTypes[entityType.ordinal()];
     }
 
 }

@@ -43,6 +43,9 @@ public enum SpawnCause {
     TRAP(31),
     VILLAGE_DEFENSE(32),
     VILLAGE_INVASION(33),
+    COMMAND(34),
+    PIGLIN_ZOMBIFIED(35),
+
 
     /**
      * Custom spawn causes.
@@ -54,7 +57,9 @@ public enum SpawnCause {
     EPIC_BOSSES_MINION(105),
     EPIC_SPAWNERS(106),
     MY_PET(107),
-    ECHO_PET(108);
+    ECHO_PET(108),
+    ELITE_BOSSES(109),
+    MORE_BOSSES(110);
 
     private final int id;
 

@@ -2,6 +2,7 @@ package com.bgsoftware.wildstacker.handlers;
 
 import com.bgsoftware.wildstacker.Locale;
 import com.bgsoftware.wildstacker.WildStackerPlugin;
+import com.bgsoftware.wildstacker.api.enums.EntityFlag;
 import com.bgsoftware.wildstacker.api.enums.SpawnCause;
 import com.bgsoftware.wildstacker.api.handlers.SystemManager;
 import com.bgsoftware.wildstacker.api.loot.LootTable;
@@ -17,7 +18,6 @@ import com.bgsoftware.wildstacker.api.spawning.SpawnCondition;
 import com.bgsoftware.wildstacker.database.Query;
 import com.bgsoftware.wildstacker.hooks.DataSerializer_Default;
 import com.bgsoftware.wildstacker.hooks.IDataSerializer;
-import com.bgsoftware.wildstacker.listeners.EntitiesListener;
 import com.bgsoftware.wildstacker.objects.WStackedBarrel;
 import com.bgsoftware.wildstacker.objects.WStackedEntity;
 import com.bgsoftware.wildstacker.objects.WStackedItem;
@@ -67,11 +67,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public final class SystemHandler implements SystemManager {
 
@@ -110,8 +108,10 @@ public final class SystemHandler implements SystemManager {
 
     @Override
     public void removeStackObject(StackedObject stackedObject) {
-        if(stackedObject instanceof StackedEntity)
+        if(stackedObject instanceof StackedEntity) {
             dataHandler.CACHED_ENTITIES.remove(((StackedEntity) stackedObject).getUniqueId());
+            ((StackedEntity) stackedObject).clearFlags();
+        }
         else if(stackedObject instanceof StackedItem)
             dataHandler.CACHED_ITEMS.remove(((StackedItem) stackedObject).getUniqueId());
         else if(stackedObject instanceof StackedSpawner)
@@ -132,17 +132,9 @@ public final class SystemHandler implements SystemManager {
         if(!EntityUtils.isStackable(livingEntity))
             throw new IllegalArgumentException("Cannot convert " + livingEntity.getType() + " into a stacked entity.");
 
-        //Entity wasn't found, creating a new object
-        if(EntityStorage.hasMetadata(livingEntity, "spawn-cause"))
-            stackedEntity = new WStackedEntity(livingEntity, 1, EntityStorage.getMetadata(livingEntity, "spawn-cause", SpawnCause.class));
-        else
-            stackedEntity = new WStackedEntity(livingEntity);
 
-        //Checks if the entity still exists after a few ticks
-        Executor.sync(() -> {
-            if(livingEntity.isDead())
-                dataHandler.CACHED_ENTITIES.remove(livingEntity.getUniqueId());
-        }, 10L);
+        //Entity wasn't found, creating a new object
+        stackedEntity = new WStackedEntity(livingEntity);
 
         Pair<Integer, SpawnCause> entityData = dataHandler.CACHED_ENTITIES_RAW.remove(livingEntity.getUniqueId());
         if(entityData != null) {
@@ -179,7 +171,8 @@ public final class SystemHandler implements SystemManager {
             }
         }
 
-        boolean shouldBeCached = stackedEntity.isCached();
+        boolean shouldBeCached = stackedEntity.isCached() || stackedEntity.getStackAmount() > 1 ||
+                ((WStackedEntity) stackedEntity).getUpgradeId() != 0;
 
         //A new entity was created. Let's see if we need to add him
         if(shouldBeCached)
@@ -394,7 +387,7 @@ public final class SystemHandler implements SystemManager {
                 StackedEntity stackedEntity = (StackedEntity) stackedObject;
                 if(stackedEntity.getLivingEntity() == null || (
                         GeneralUtils.isChunkLoaded(stackedEntity.getLivingEntity().getLocation()) &&
-                        (stackedEntity.getLivingEntity().isDead() && !((WStackedEntity) stackedEntity).hasDeadFlag())) ||
+                        (stackedEntity.getLivingEntity().isDead() && !stackedEntity.hasFlag(EntityFlag.DEAD_ENTITY))) ||
                         !EntityUtils.isStackable(stackedEntity.getLivingEntity())) {
                     removeStackObject(stackedObject);
                 }
@@ -544,44 +537,35 @@ public final class SystemHandler implements SystemManager {
     }
 
     public void handleChunkLoad(Chunk chunk){
-        Entity[] entities = chunk.getEntities();
-
-        // We substring names if necessary
-        Arrays.stream(entities).filter(entity -> {
-            String customName = plugin.getNMSAdapter().getCustomName(entity);
-            return customName != null && customName.length() > 256;
-        }).forEach(entity -> {
-            String customName = plugin.getNMSAdapter().getCustomName(entity);
-            plugin.getNMSAdapter().setCustomName(entity, customName.substring(0, 256));
-        });
-
-        if(ServerVersion.isAtLeast(ServerVersion.v1_8)) {
-            //Trying to remove all the corrupted stacked blocks
-            Executor.async(() -> {
-                Stream<Entity> entityStream = Arrays.stream(entities).filter(entity -> {
-                    String customName = plugin.getNMSAdapter().getCustomName(entity);
-                    return entity instanceof ArmorStand && customName != null && customName.equals("BlockDisplay") &&
-                            !isStackedBarrel(entity.getLocation().getBlock());
-                });
-                Executor.sync(() -> entityStream.forEach(entity -> {
-                    Block block = entity.getLocation().getBlock();
-                    if (block.getType() == Material.CAULDRON)
-                        block.setType(Material.AIR);
-                    entity.remove();
-                }));
-            });
-
-            loadBarrels(chunk);
-        }
-
         loadSpawners(chunk);
 
-        //Update nerf status & names to all entities
-        Executor.async(() -> Arrays.stream(entities).filter(EntityUtils::isStackable).forEach(entity -> {
-            StackedEntity stackedEntity = WStackedEntity.of(entity);
-            stackedEntity.updateNerfed();
-            stackedEntity.updateName();
-        }));
+        boolean atLeast18 = ServerVersion.isAtLeast(ServerVersion.v1_8);
+
+        if(atLeast18)
+            loadBarrels(chunk);
+
+        for(Entity entity : chunk.getEntities()){
+            String customName = plugin.getNMSAdapter().getCustomName(entity);
+
+            // Checking for too long names
+            if(customName != null && customName.length() > 256)
+                plugin.getNMSAdapter().setCustomName(entity, customName.substring(0, 256));
+
+            // Remove display blocks of invalid barrels
+            if(atLeast18 && entity instanceof ArmorStand && customName != null &&
+                    customName.equals("BlockDisplay") && !isStackedBarrel(entity.getLocation().getBlock())){
+                Block block = entity.getLocation().getBlock();
+                if (block.getType() == Material.CAULDRON)
+                    block.setType(Material.AIR);
+                entity.remove();
+            }
+
+            if(EntityUtils.isStackable(entity)){
+                StackedEntity stackedEntity = WStackedEntity.of(entity);
+                stackedEntity.updateNerfed();
+                stackedEntity.updateName();
+            }
+        }
     }
 
     public void handleChunkUnload(Chunk chunk){
@@ -590,8 +574,10 @@ public final class SystemHandler implements SystemManager {
         for(Entity entity : entities){
             if(EntityUtils.isStackable(entity)) {
                 StackedEntity stackedEntity = dataHandler.CACHED_ENTITIES.remove(entity.getUniqueId());
-                if (stackedEntity != null)
+                if (stackedEntity != null) {
                     dataSerializer.saveEntity(stackedEntity);
+                    stackedEntity.clearFlags();
+                }
             }
 
             else if(entity instanceof Item) {
@@ -603,7 +589,7 @@ public final class SystemHandler implements SystemManager {
 
         for(StackedSpawner stackedSpawner : getStackedSpawners(chunk)){
             dataHandler.removeStackedSpawner(stackedSpawner);
-            if(stackedSpawner.getStackAmount() > 1) {
+            if(stackedSpawner.getStackAmount() > 1 || ((WStackedSpawner) stackedSpawner).getUpgradeId() != 0) {
                 dataHandler.CACHED_SPAWNERS_RAW.computeIfAbsent(new ChunkPosition(stackedSpawner.getLocation()), s -> Maps.newConcurrentMap())
                         .put(stackedSpawner.getLocation(), new WUnloadedStackedSpawner(stackedSpawner));
             }
@@ -638,7 +624,7 @@ public final class SystemHandler implements SystemManager {
 
     public <T extends Entity> T spawnEntityWithoutStacking(Location location, Class<T> type, SpawnCause spawnCause, Consumer<T> beforeSpawnConsumer, Consumer<T> afterSpawnConsumer){
         return plugin.getNMSAdapter().createEntity(location, type, spawnCause, entity -> {
-            EntitiesListener.noStackEntities.add(entity.getUniqueId());
+            EntityStorage.setMetadata(entity, EntityFlag.BYPASS_STACKING, true);
             if(beforeSpawnConsumer != null)
                 beforeSpawnConsumer.accept(entity);
         }, afterSpawnConsumer);
@@ -651,12 +637,11 @@ public final class SystemHandler implements SystemManager {
 
     @Override
     public StackedItem spawnItemWithAmount(Location location, ItemStack itemStack, int amount) {
-        ThreadLocalRandom random = ThreadLocalRandom.current();
-        location = location.clone();
-
-        location.setX(location.getX() + (random.nextFloat() * 0.5F) + 0.25D);
-        location.setY(location.getY() + (random.nextFloat() * 0.5F) + 0.25D);
-        location.setZ(location.getZ() + (random.nextFloat() * 0.5F) + 0.25D);
+//        ThreadLocalRandom random = ThreadLocalRandom.current();
+        
+//        location.setX(location.getX() + (random.nextFloat() * 0.5F) + 0.25D);
+//        location.setY(location.getY() + (random.nextFloat() * 0.5F) + 0.25D);
+//        location.setZ(location.getZ() + (random.nextFloat() * 0.5F) + 0.25D);
 
         int limit = plugin.getSettings().itemsLimits.getOrDefault(itemStack.getType(), Integer.MAX_VALUE);
         limit = limit < 1 ? Integer.MAX_VALUE : limit;
@@ -695,7 +680,7 @@ public final class SystemHandler implements SystemManager {
 
         LivingEntity livingEntity = (LivingEntity) spawnEntityWithoutStacking(stackedEntity.getLocation(), entityClass, SpawnCause.CUSTOM, entity -> {
             // Marking the entity as a corpse before the actual spawning
-            EntityStorage.setMetadata(entity, "corpse", null);
+            EntityStorage.setMetadata(entity, EntityFlag.CORPSE, true);
         }, entity -> {
             // Updating the entity values after the actual spawning
             plugin.getNMSAdapter().updateEntity(stackedEntity.getLivingEntity(), (LivingEntity) entity);
